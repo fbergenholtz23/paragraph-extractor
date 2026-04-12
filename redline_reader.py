@@ -178,38 +178,47 @@ def analyze(docx_path):
         return
 
     for i, (start, end) in enumerate(redlined_clauses, 1):
-        original_lines = []
-        suggested_lines = []
+        full_section_lines = []   # full clause in suggested state
+        redline_only_lines = []   # just the redlined paragraphs
         section_comment_ids = set()
+
+        original_section_lines = []  # full clause before changes
+        new_section_lines = []        # full clause after changes
+        redline_only_lines = []       # just the redlined paragraphs
 
         for para in paragraphs[start:end + 1]:
             if has_tracked_changes(para):
                 orig, sugg = get_text_variants(para)
                 if orig.strip():
-                    original_lines.append(orig)
+                    original_section_lines.append(orig)
                 if sugg.strip():
-                    suggested_lines.append(sugg)
+                    new_section_lines.append(sugg)
+                    redline_only_lines.append(sugg)
+                elif orig.strip():
+                    redline_only_lines.append(f"[DELETED: {orig.strip()}]")
                 section_comment_ids.update(get_comment_ids(para))
             else:
                 text = get_plain_text(para).strip()
                 if text:
-                    original_lines.append(text)
-                    suggested_lines.append(text)
+                    original_section_lines.append(text)
+                    new_section_lines.append(text)
 
-        print(f"{'=' * 60}")
-        print(f"  Redlined Section #{i}")
-        print(f"{'=' * 60}")
+        print(f"\nSection #{i}\n")
 
-        print("\n  ORIGINAL:")
-        for line in original_lines:
+        print("Original section:\n")
+        for line in original_section_lines:
             print(f"    {line}")
 
-        print("\n  SUGGESTED:")
-        for line in suggested_lines:
+        print("\nOriginal suggestion (redline):\n")
+        for line in redline_only_lines:
+            print(f"    {line}")
+
+        print("\nNew section:\n")
+        for line in new_section_lines:
             print(f"    {line}")
 
         if section_comment_ids:
-            print("\n  COMMENTS:")
+            print("\nComments:\n")
             for cid in sorted(section_comment_ids, key=lambda x: int(x)):
                 c = comments.get(cid)
                 if c:
