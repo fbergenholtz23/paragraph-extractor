@@ -105,49 +105,96 @@ def load_document_paragraphs(docx_path):
     return root.findall(f".//{_tag('p')}")
 
 
-def group_redlined_sections(paragraphs):
+def get_para_style(para_elem):
+    pPr = para_elem.find(f"{{{W}}}pPr")
+    if pPr is not None:
+        pStyle = pPr.find(f"{{{W}}}pStyle")
+        if pStyle is not None:
+            return pStyle.get(f"{{{W}}}val")
+    return None
+
+
+def is_clause_start(para_elem):
     """
-    Group consecutive paragraphs that contain tracked changes into sections.
-    Returns a list of lists, each inner list being one contiguous redlined section.
+    Return True if this paragraph begins a new numbered clause.
+    sapcontractsectionlev1 always starts a new section.
+    sapcontractsectionlev2 only starts a new clause when it carries a real
+    list number (numId != 0), distinguishing it from unnumbered continuation
+    paragraphs that share the same style.
     """
-    sections = []
-    current = []
+    style = get_para_style(para_elem)
+    if style == "sapcontractsectionlev1":
+        return True
+    if style == "sapcontractsectionlev2":
+        pPr = para_elem.find(f"{{{W}}}pPr")
+        if pPr is not None:
+            numPr = pPr.find(f"{{{W}}}numPr")
+            if numPr is not None:
+                numIdEl = numPr.find(f"{{{W}}}numId")
+                if numIdEl is not None:
+                    num_id = numIdEl.get(f"{{{W}}}val")
+                    return num_id is not None and num_id != "0"
+    return False
 
-    for para in paragraphs:
-        if has_tracked_changes(para):
-            current.append(para)
-        else:
-            if current:
-                sections.append(current)
-                current = []
 
-    if current:
-        sections.append(current)
+def get_plain_text(para_elem):
+    """Return the plain text of a paragraph (no change tracking applied)."""
+    parts = []
+    for t in para_elem.iter(f"{{{W}}}t"):
+        parts.append(t.text or "")
+    for t in para_elem.iter(f"{{{W}}}delText"):
+        parts.append(t.text or "")
+    return "".join(parts)
 
-    return sections
+
+def group_clauses(paragraphs):
+    """
+    Split the document into logical clauses, where each clause starts at a
+    sapcontractsectionlev1/lev2 paragraph. Returns a list of (start, end)
+    index tuples (inclusive).
+    """
+    boundaries = [i for i, p in enumerate(paragraphs) if is_clause_start(p)]
+    if not boundaries:
+        return [(0, len(paragraphs) - 1)]
+    clauses = []
+    for j, start in enumerate(boundaries):
+        end = boundaries[j + 1] - 1 if j + 1 < len(boundaries) else len(paragraphs) - 1
+        clauses.append((start, end))
+    return clauses
 
 
 def analyze(docx_path):
     comments = load_comments(docx_path)
     paragraphs = load_document_paragraphs(docx_path)
-    sections = group_redlined_sections(paragraphs)
+    clauses = group_clauses(paragraphs)
 
-    if not sections:
+    redlined_clauses = [
+        (start, end) for start, end in clauses
+        if any(has_tracked_changes(paragraphs[i]) for i in range(start, end + 1))
+    ]
+
+    if not redlined_clauses:
         print("No redlined sections found.")
         return
 
-    for i, section in enumerate(sections, 1):
+    for i, (start, end) in enumerate(redlined_clauses, 1):
         original_lines = []
         suggested_lines = []
         section_comment_ids = set()
 
-        for para in section:
-            orig, sugg = get_text_variants(para)
-            if orig.strip():
-                original_lines.append(orig)
-            if sugg.strip():
-                suggested_lines.append(sugg)
-            section_comment_ids.update(get_comment_ids(para))
+        for para in paragraphs[start:end + 1]:
+            if has_tracked_changes(para):
+                orig, sugg = get_text_variants(para)
+                if orig.strip():
+                    original_lines.append(orig)
+                if sugg.strip():
+                    suggested_lines.append(sugg)
+                section_comment_ids.update(get_comment_ids(para))
+            else:
+                text = get_plain_text(para).strip()
+                if text:
+                    original_lines.append(text)
+                    suggested_lines.append(text)
 
         print(f"{'=' * 60}")
         print(f"  Redlined Section #{i}")
